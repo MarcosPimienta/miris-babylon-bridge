@@ -1,0 +1,21 @@
+{
+  "name": "Miris Babylon Bridge",
+  "version": "1.0",
+  "description": "Intercepts Miris Player WebGL geometry at document-start and pipes it into BabylonJS",
+  "manifest_version": 3,
+  "content_scripts": [
+    {
+      "matches": [
+        "*://player.miris.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false,
+      "world": "MAIN"
+    }
+  ],
+  "host_permissions": [
+    "*://player.miris.com/*",
+    "http://localhost:5173/*"
+  ]
+}
