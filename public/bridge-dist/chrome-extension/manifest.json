@@ -8,9 +8,7 @@
       "matches": [
         "*://player.miris.com/*"
       ],
-      "js": [
-        "content_v3.js"
-      ],
+      "js": ["content.js"],
       "run_at": "document_start",
       "all_frames": false,
       "world": "MAIN"

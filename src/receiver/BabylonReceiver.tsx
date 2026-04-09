@@ -16,7 +16,7 @@ import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera';
 import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight';
 import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector';
-import { Color4 } from '@babylonjs/core/Maths/math.color';
+import { Color4, Color3 } from '@babylonjs/core/Maths/math.color';
 import { onChunk } from '../tap/geometryTap';
 import { translateChunk } from '../translator/toVertexData';
 import { spawnMesh } from '../spawner/meshSpawner';
@@ -60,6 +60,8 @@ export default function BabylonReceiver({ onStats }: BabylonReceiverProps) {
     sceneRef.current = scene;
     scene.clearColor = new Color4(0, 0, 0, 0); // fully transparent
 
+    // Let the scene render exclusively what is intercepted
+
     // Camera — static ArcRotate, user can orbit with mouse on overlay
     const camera = new ArcRotateCamera('cam', -Math.PI / 2, Math.PI / 4, 10, Vector3.Zero(), scene);
     camera.attachControl(canvas, true);
@@ -84,8 +86,12 @@ export default function BabylonReceiver({ onStats }: BabylonReceiverProps) {
     // -----------------------------------------------------------------------
     const unsubscribe = onChunk((chunk) => {
       if (!sceneRef.current) return;
+      
+      console.log('[BabylonReceiver] Received chunk:', chunk);
 
       const vertexData = translateChunk(chunk);
+      console.log('[BabylonReceiver] VertexData:', vertexData);
+      
       spawnMesh(sceneRef.current, vertexData);
 
       const vertexCount = chunk.position ? chunk.position.length / 3 : 0;

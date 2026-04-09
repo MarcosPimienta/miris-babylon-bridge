@@ -7756,6 +7756,57 @@ var process = { env: { NODE_ENV: "production" } };
     }, 5e3);
     console.info("[Tap v2] 🔌 Tap installed. Scanning for existing contexts + patching getContext...");
   }
+  const scriptRel = "modulepreload";
+  const assetsURL = function(dep) {
+    return "/" + dep;
+  };
+  const seen = {};
+  const __vitePreload = function preload(baseModule, deps, importerUrl) {
+    if (true) {
+      return baseModule();
+    }
+    const links = document.getElementsByTagName("link");
+    return Promise.all(deps.map((dep) => {
+      dep = assetsURL(dep);
+      if (dep in seen)
+        return;
+      seen[dep] = true;
+      const isCss = dep.endsWith(".css");
+      const cssSelector = isCss ? '[rel="stylesheet"]' : "";
+      const isBaseRelative = !!importerUrl;
+      if (isBaseRelative) {
+        for (let i = links.length - 1; i >= 0; i--) {
+          const link2 = links[i];
+          if (link2.href === dep && (!isCss || link2.rel === "stylesheet")) {
+            return;
+          }
+        }
+      } else if (document.querySelector(`link[href="${dep}"]${cssSelector}`)) {
+        return;
+      }
+      const link = document.createElement("link");
+      link.rel = isCss ? "stylesheet" : scriptRel;
+      if (!isCss) {
+        link.as = "script";
+        link.crossOrigin = "";
+      }
+      link.href = dep;
+      document.head.appendChild(link);
+      if (isCss) {
+        return new Promise((res, rej) => {
+          link.addEventListener("load", res);
+          link.addEventListener("error", () => rej(new Error(`Unable to preload CSS for ${dep}`)));
+        });
+      }
+    })).then(() => baseModule()).catch((err) => {
+      const e = new Event("vite:preloadError", { cancelable: true });
+      e.payload = err;
+      window.dispatchEvent(e);
+      if (!e.defaultPrevented) {
+        throw err;
+      }
+    });
+  };
   const IsWeakRefSupported = typeof WeakRef !== "undefined";
   class EventState {
     /**
@@ -19040,57 +19091,6 @@ var process = { env: { NODE_ENV: "production" } };
     this._internalTexturesCache.push(texture);
     rtWrapper.setTextures(texture);
     return rtWrapper;
-  };
-  const scriptRel = "modulepreload";
-  const assetsURL = function(dep) {
-    return "/" + dep;
-  };
-  const seen = {};
-  const __vitePreload = function preload(baseModule, deps, importerUrl) {
-    if (true) {
-      return baseModule();
-    }
-    const links = document.getElementsByTagName("link");
-    return Promise.all(deps.map((dep) => {
-      dep = assetsURL(dep);
-      if (dep in seen)
-        return;
-      seen[dep] = true;
-      const isCss = dep.endsWith(".css");
-      const cssSelector = isCss ? '[rel="stylesheet"]' : "";
-      const isBaseRelative = !!importerUrl;
-      if (isBaseRelative) {
-        for (let i = links.length - 1; i >= 0; i--) {
-          const link2 = links[i];
-          if (link2.href === dep && (!isCss || link2.rel === "stylesheet")) {
-            return;
-          }
-        }
-      } else if (document.querySelector(`link[href="${dep}"]${cssSelector}`)) {
-        return;
-      }
-      const link = document.createElement("link");
-      link.rel = isCss ? "stylesheet" : scriptRel;
-      if (!isCss) {
-        link.as = "script";
-        link.crossOrigin = "";
-      }
-      link.href = dep;
-      document.head.appendChild(link);
-      if (isCss) {
-        return new Promise((res, rej) => {
-          link.addEventListener("load", res);
-          link.addEventListener("error", () => rej(new Error(`Unable to preload CSS for ${dep}`)));
-        });
-      }
-    })).then(() => baseModule()).catch((err) => {
-      const e = new Event("vite:preloadError", { cancelable: true });
-      e.payload = err;
-      window.dispatchEvent(e);
-      if (!e.defaultPrevented) {
-        throw err;
-      }
-    });
   };
   const ToGammaSpace = 1 / 2.2;
   const ToLinearSpace = 2.2;
@@ -69657,6 +69657,24 @@ ${this.m[12]}, ${this.m[13]}, ${this.m[14]}, ${this.m[15]}}`;
   RegisterClass("BABYLON.DirectionalLight", DirectionalLight);
   function translateChunk(chunk, flipZ = true) {
     const vd2 = new VertexData();
+    if (chunk.type === "gpu_decoded_positions" && chunk.position) {
+      if (flipZ) {
+        const positions = new Float32Array(chunk.position);
+        for (let i = 2; i < positions.length; i += 3) {
+          positions[i] = -positions[i];
+        }
+        vd2.positions = positions;
+      } else {
+        vd2.positions = chunk.position;
+      }
+      const numVertices = chunk.position.length / 3;
+      const indices = new Uint32Array(numVertices);
+      for (let k2 = 0; k2 < numVertices; k2++) {
+        indices[k2] = k2;
+      }
+      vd2.indices = indices;
+      return vd2;
+    }
     if (chunk.position) {
       if (flipZ) {
         const positions = new Float32Array(chunk.position);
@@ -69691,22 +69709,6 @@ ${this.m[12]}, ${this.m[13]}, ${this.m[14]}, ${this.m[15]}}`;
         indices[i + 2] = src[i + 1];
       }
       vd2.indices = indices;
-    } else if (chunk.position) {
-      const numVertices = chunk.position.length / 3;
-      const indices = new Uint32Array(numVertices);
-      for (let k2 = 0; k2 < numVertices; k2++)
-        indices[k2] = k2;
-      for (let i = 0; i < indices.length - 2; i += 3) {
-        const tmp = indices[i + 1];
-        indices[i + 1] = indices[i + 2];
-        indices[i + 2] = tmp;
-      }
-      vd2.indices = indices;
-    }
-    if (!vd2.normals && vd2.positions && vd2.indices) {
-      const normals = new Float32Array(vd2.positions.length);
-      VertexData.ComputeNormals(vd2.positions, vd2.indices, normals);
-      vd2.normals = normals;
     }
     return vd2;
   }
@@ -72887,17 +72889,20 @@ ${this.m[12]}, ${this.m[13]}, ${this.m[14]}, ${this.m[15]}}`;
   Scene.DefaultMaterialFactory = (scene) => {
     return new StandardMaterial("default material", scene);
   };
+  const standardMaterial = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+    __proto__: null,
+    StandardMaterial,
+    StandardMaterialDefines
+  }, Symbol.toStringTag, { value: "Module" }));
   const materialCache = /* @__PURE__ */ new WeakMap();
-  function getSolidMaterial(scene) {
+  function getPointCloudMaterial(scene) {
     if (materialCache.has(scene))
       return materialCache.get(scene);
-    const mat = new StandardMaterial("miris_bridge_solid", scene);
-    mat.diffuseColor = new Color3(0, 0.5, 0.8);
-    mat.emissiveColor = new Color3(0, 0.2, 0.4);
-    mat.specularColor = new Color3(0, 1, 1);
-    mat.specularPower = 32;
-    mat.ambientColor = new Color3(0.5, 0.5, 0.5);
-    mat.alpha = 0.9;
+    const mat = new StandardMaterial("miris_bridge_pc", scene);
+    mat.pointsCloud = true;
+    mat.pointSize = 2.5;
+    mat.emissiveColor = new Color3(0, 1, 0.8);
+    mat.disableLighting = true;
     materialCache.set(scene, mat);
     return mat;
   }
@@ -72906,7 +72911,7 @@ ${this.m[12]}, ${this.m[13]}, ${this.m[14]}, ${this.m[15]}}`;
     const name2 = `miris_chunk_${meshCounter++}`;
     const mesh = new Mesh(name2, scene);
     vertexData.applyToMesh(mesh, false);
-    mesh.material = getSolidMaterial(scene);
+    mesh.material = getPointCloudMaterial(scene);
     return mesh;
   }
   function BabylonReceiver({ onStats }) {
@@ -72932,6 +72937,14 @@ ${this.m[12]}, ${this.m[13]}, ${this.m[14]}, ${this.m[15]}}`;
       const scene = new Scene(engine);
       sceneRef.current = scene;
       scene.clearColor = new Color4(0, 0, 0, 0);
+      __vitePreload(() => Promise.resolve().then(() => sphereBuilder), false ? "__VITE_PRELOAD__" : void 0).then(({ CreateSphere: CreateSphere2 }) => {
+        const debugSphere = CreateSphere2("debug_sphere", { diameter: 2 }, scene);
+        __vitePreload(() => Promise.resolve().then(() => standardMaterial), false ? "__VITE_PRELOAD__" : void 0).then(({ StandardMaterial: StandardMaterial2 }) => {
+          const mat = new StandardMaterial2("debug_mat", scene);
+          mat.emissiveColor = new Color3(1, 0, 0);
+          debugSphere.material = mat;
+        });
+      });
       const camera = new ArcRotateCamera("cam", -Math.PI / 2, Math.PI / 4, 10, Vector3.Zero(), scene);
       camera.attachControl(canvas, true);
       camera.minZ = 0.01;
@@ -86985,6 +86998,101 @@ if (fragDepth==nearestDepth) {frontColor.rgb+=color.rgb*color.a*alphaMultiplier;
   const default_fragment = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
     __proto__: null,
     defaultPixelShader
+  }, Symbol.toStringTag, { value: "Module" }));
+  function CreateSphereVertexData(options) {
+    const segments = (options.segments || 32) | 0;
+    const diameterX = options.diameterX || options.diameter || 1;
+    const diameterY = options.diameterY || options.diameter || 1;
+    const diameterZ = options.diameterZ || options.diameter || 1;
+    const arc = options.arc && (options.arc <= 0 || options.arc > 1) ? 1 : options.arc || 1;
+    const slice = options.slice && options.slice <= 0 ? 1 : options.slice || 1;
+    const sideOrientation = options.sideOrientation === 0 ? 0 : options.sideOrientation || VertexData.DEFAULTSIDE;
+    const dedupTopBottomIndices = !!options.dedupTopBottomIndices;
+    const radius = new Vector3(diameterX / 2, diameterY / 2, diameterZ / 2);
+    const totalZRotationSteps = 2 + segments;
+    const totalYRotationSteps = 2 * totalZRotationSteps;
+    const indices = [];
+    const positions = [];
+    const normals = [];
+    const uvs = [];
+    for (let zRotationStep = 0; zRotationStep <= totalZRotationSteps; zRotationStep++) {
+      const normalizedZ = zRotationStep / totalZRotationSteps;
+      const angleZ = normalizedZ * Math.PI * slice;
+      for (let yRotationStep = 0; yRotationStep <= totalYRotationSteps; yRotationStep++) {
+        const normalizedY = yRotationStep / totalYRotationSteps;
+        const angleY = normalizedY * Math.PI * 2 * arc;
+        const rotationZ = Matrix.RotationZ(-angleZ);
+        const rotationY = Matrix.RotationY(angleY);
+        const afterRotZ = Vector3.TransformCoordinates(Vector3.Up(), rotationZ);
+        const complete = Vector3.TransformCoordinates(afterRotZ, rotationY);
+        const vertex = complete.multiply(radius);
+        const normal = complete.divide(radius).normalize();
+        positions.push(vertex.x, vertex.y, vertex.z);
+        normals.push(normal.x, normal.y, normal.z);
+        uvs.push(normalizedY, normalizedZ);
+      }
+      if (zRotationStep > 0) {
+        const verticesCount = positions.length / 3;
+        for (let firstIndex = verticesCount - 2 * (totalYRotationSteps + 1); firstIndex + totalYRotationSteps + 2 < verticesCount; firstIndex++) {
+          if (dedupTopBottomIndices) {
+            if (zRotationStep > 1) {
+              indices.push(firstIndex);
+              indices.push(firstIndex + 1);
+              indices.push(firstIndex + totalYRotationSteps + 1);
+            }
+            if (zRotationStep < totalZRotationSteps || slice < 1) {
+              indices.push(firstIndex + totalYRotationSteps + 1);
+              indices.push(firstIndex + 1);
+              indices.push(firstIndex + totalYRotationSteps + 2);
+            }
+          } else {
+            indices.push(firstIndex);
+            indices.push(firstIndex + 1);
+            indices.push(firstIndex + totalYRotationSteps + 1);
+            indices.push(firstIndex + totalYRotationSteps + 1);
+            indices.push(firstIndex + 1);
+            indices.push(firstIndex + totalYRotationSteps + 2);
+          }
+        }
+      }
+    }
+    VertexData._ComputeSides(sideOrientation, positions, indices, normals, uvs, options.frontUVs, options.backUVs);
+    const vertexData = new VertexData();
+    vertexData.indices = indices;
+    vertexData.positions = positions;
+    vertexData.normals = normals;
+    vertexData.uvs = uvs;
+    return vertexData;
+  }
+  function CreateSphere(name2, options = {}, scene = null) {
+    const sphere = new Mesh(name2, scene);
+    options.sideOrientation = Mesh._GetDefaultSideOrientation(options.sideOrientation);
+    sphere._originalBuilderSideOrientation = options.sideOrientation;
+    const vertexData = CreateSphereVertexData(options);
+    vertexData.applyToMesh(sphere, options.updatable);
+    return sphere;
+  }
+  const SphereBuilder = {
+    // eslint-disable-next-line @typescript-eslint/naming-convention
+    CreateSphere
+  };
+  VertexData.CreateSphere = CreateSphereVertexData;
+  Mesh.CreateSphere = (name2, segments, diameter, scene, updatable, sideOrientation) => {
+    const options = {
+      segments,
+      diameterX: diameter,
+      diameterY: diameter,
+      diameterZ: diameter,
+      sideOrientation,
+      updatable
+    };
+    return CreateSphere(name2, options, scene);
+  };
+  const sphereBuilder = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+    __proto__: null,
+    CreateSphere,
+    CreateSphereVertexData,
+    SphereBuilder
   }, Symbol.toStringTag, { value: "Module" }));
   const name$5 = "passPixelShader";
   const shader$5 = `varying vUV: vec2f;var textureSamplerSampler: sampler;var textureSampler: texture_2d<f32>;

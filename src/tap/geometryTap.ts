@@ -20,6 +20,7 @@
 export interface GeometryChunk {
   /** Sequential draw-call ID */
   id: string;
+  type?: string;
   position?: Float32Array;
   normal?: Float32Array;
   uv?: Float32Array;
@@ -44,8 +45,10 @@ export const geometryBus: EventTarget =
   })();
 
 export function onChunk(handler: (chunk: GeometryChunk) => void): () => void {
-  const listener = (e: Event) =>
-    handler((e as Event & { chunk: GeometryChunk }).chunk);
+const listener = (e: Event) => {
+    const chunk = (e as Event & { chunk?: GeometryChunk }).chunk || (e as CustomEvent<GeometryChunk>).detail;
+    if (chunk) handler(chunk);
+  };
   geometryBus.addEventListener(GEOMETRY_CHUNK_EVENT, listener);
   return () => geometryBus.removeEventListener(GEOMETRY_CHUNK_EVENT, listener);
 }

@@ -1,39 +1,22 @@
-// ==UserScript==
-// @name         Miris Babylon Bridge
-// @namespace    miris-babylon-bridge
-// @version      0.3
-// @description  Intercepts Miris Player WebGL geometry at page-start and pipes it into a BabylonJS overlay
-// @match        https://player.miris.com/*
-// @run-at       document-start
-// @grant        none
-// ==/UserScript==
-
 /**
- * HOW TO INSTALL:
- * 1. Install Tampermonkey or Violentmonkey in Chrome
- * 2. Create a new userscript and paste this entire file
- * 3. Run: npm run build:inject   (in the miris-babylon-bridge project)
- * 4. Run: npm run dev             (dev server must be live at localhost:5173)
- * 5. Navigate to player.miris.com — the userscript runs BEFORE lockdown-install.js
+ * content.js -- Miris Babylon Bridge Chrome Extension v3.0 Ultimate Native Tap
+ * Hooks bufferData, bufferSubData, drawElements, drawArrays, AND instanced variants!
  */
+(function() {
+  var DEV = 'http://localhost:5173';
+  var GEOMETRY_CHUNK_EVENT = 'geometry:chunk';
 
-(function () {
-  'use strict';
+  // Shared bus setup
+  var geometryBus = window.__mirisBus;
+  if (!geometryBus) {
+    geometryBus = new EventTarget();
+    window.__mirisBus = geometryBus;
+  }
+  window.__mirisInstalled = true; // Tell optional geometryTap to sleep
 
-  const DEV = 'http://localhost:5173';
-  const GEOMETRY_CHUNK_EVENT = 'geometry:chunk';
-
-  // ── Shared geometry bus ─────────────────────────────────────────────────────
-  // The bridge bundle (bridge.iife.js) reads from window.__mirisBus so both
-  // the userscript tap and the React overlay share the same event channel.
-  const geometryBus = new EventTarget();
-  window.__mirisBus = geometryBus;
-  window.__mirisInstalled = true; // Signal to bridge bundle: tap is already live
-
-  // ── Per-context state ───────────────────────────────────────────────────────
-  const GL_ARRAY_BUFFER = 0x8892;
-  const GL_ELEMENT_ARRAY_BUFFER = 0x8893;
-  const contextStates = new WeakMap();
+  var GL_ARRAY_BUFFER = 0x8892;
+  var GL_ELEMENT_ARRAY_BUFFER = 0x8893;
+  var contextStates = new WeakMap();
 
   function getState(gl) {
     if (!contextStates.has(gl)) {
@@ -41,34 +24,31 @@
         bufferStore: new WeakMap(),
         boundBuffer: new Map(),
         attribs: new Map(),
-        enabledAttribs: new Set(),
+        enabledAttribs: new Set()
       });
     }
     return contextStates.get(gl);
   }
 
-  // ── Geometry chunk assembly ─────────────────────────────────────────────────
-  let drawCallId = 0;
-  let interceptCount = 0;
+  var drawCallId = 0;
 
   function buildAndEmit(state, indexBuffer, indexType, vertexCount) {
-    const rawVertexBuffers = [];
-    const attribArrays = new Map();
+    var rawVertexBuffers = [];
+    var attribArrays = new Map();
 
-    for (const idx of state.enabledAttribs) {
-      const attrib = state.attribs.get(idx);
-      if (!attrib || attrib.type !== 0x1406) continue; // GL_FLOAT only
-      const raw = state.bufferStore.get(attrib.buffer);
+    for (var idx of state.enabledAttribs) {
+      var attrib = state.attribs.get(idx);
+      if (!attrib || attrib.type !== 0x1406) continue; // GL_FLOAT
+      var raw = state.bufferStore.get(attrib.buffer);
       if (!raw) continue;
-      const f32 = new Float32Array(raw);
+      var f32 = new Float32Array(raw);
       attribArrays.set(idx, f32);
       rawVertexBuffers.push(f32);
     }
 
     if (rawVertexBuffers.length === 0) return;
 
-    // Heuristic: attrib 0 = position (size 3), attrib 1 = normal, attrib 2 = uv
-    let position = attribArrays.get(0);
+    var position = attribArrays.get(0);
     if (!position || state.attribs.get(0)?.size !== 3) {
       position = [...attribArrays.values()]
         .filter(f => f.length % 3 === 0)
@@ -76,154 +56,175 @@
     }
     if (!position) return;
 
-    const normal = (state.attribs.get(1)?.size === 3) ? attribArrays.get(1) : undefined;
-    const uv     = (state.attribs.get(2)?.size === 2) ? attribArrays.get(2) : undefined;
+    var normal = (state.attribs.get(1)?.size === 3) ? attribArrays.get(1) : undefined;
+    var uv = (state.attribs.get(2)?.size === 2) ? attribArrays.get(2) : undefined;
 
-    let index;
+    var indexArray;
     if (indexBuffer) {
-      index = indexType === 0x1405
+      indexArray = (indexType === 0x1405)
         ? new Uint32Array(indexBuffer.slice(0))
         : new Uint16Array(indexBuffer.slice(0));
     }
 
-    const chunk = { id: `draw_${drawCallId++}`, position, normal, uv, index, rawVertexBuffers, vertexCount };
-    interceptCount++;
+    var chunk = {
+      id: "raw_" + (drawCallId++),
+      position: position,
+      normal: normal,
+      uv: uv,
+      index: indexArray,
+      rawVertexBuffers: rawVertexBuffers,
+      vertexCount: vertexCount
+    };
 
-    console.groupCollapsed(`[Userscript Tap] ✅ ${chunk.id} | ${vertexCount} verts | ${attribArrays.size} attribs`);
-    console.log('  position items:', position.length);
-    console.log('  normal   items:', normal?.length ?? '—');
-    console.log('  index    items:', index?.length ?? '—');
-    console.groupEnd();
-
-    geometryBus.dispatchEvent(Object.assign(new Event(GEOMETRY_CHUNK_EVENT), { chunk }));
+    console.log('[v3 Ultimate Tap] ✅ Chunk', chunk.id, '| verts:', vertexCount);
+    geometryBus.dispatchEvent(Object.assign(new Event(GEOMETRY_CHUNK_EVENT), { chunk: chunk }));
   }
 
-  // ── WebGL context wrapper ───────────────────────────────────────────────────
   function wrapContext(gl) {
     if (gl.__miris_tapped__) return;
     gl.__miris_tapped__ = true;
+    console.info('[v3 Ultimate Tap] Wrapping context', gl);
 
-    const proto = Object.getPrototypeOf(gl);
-    const state = getState(gl);
+    var proto = Object.getPrototypeOf(gl);
+    var state = getState(gl);
 
-    const _bindBuffer = proto.bindBuffer.bind(gl);
-    gl.bindBuffer = function (target, buffer) {
+    var _bindBuffer = proto.bindBuffer.bind(gl);
+    gl.bindBuffer = function(target, buffer) {
       state.boundBuffer.set(target, buffer);
       return _bindBuffer(target, buffer);
     };
 
-    const _bufferData = proto.bufferData.bind(gl);
-    gl.bufferData = function (target, data, usage, ...rest) {
-      const buf = state.boundBuffer.get(target);
+    function storeBufferData(target, data) {
+      var buf = state.boundBuffer.get(target);
       if (buf && data) {
-        let ab;
-        if (data instanceof ArrayBuffer) {
-          ab = data;
-        } else {
-          const view = data;
-          ab = (view.buffer instanceof ArrayBuffer)
-            ? view.buffer
-            : new Uint8Array(view.buffer).buffer;
+        var ab;
+        if (data instanceof ArrayBuffer) ab = data.slice(0);
+        else {
+          var view = data;
+          if (view.buffer instanceof ArrayBuffer) ab = view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+          else ab = new Uint8Array(view.buffer).buffer; // SharedArrayBuffer fallback
         }
-        state.bufferStore.set(buf, ab);
+        if (ab) state.bufferStore.set(buf, ab);
       }
-      return _bufferData(target, data, usage, ...rest);
+    }
+
+    var _bufferData = proto.bufferData.bind(gl);
+    gl.bufferData = function(target, data, usage) {
+      storeBufferData(target, data);
+      return _bufferData.apply(this, arguments);
     };
 
-    const _vap = proto.vertexAttribPointer.bind(gl);
-    gl.vertexAttribPointer = function (index, size, type, normalized, stride, offset) {
-      const buf = state.boundBuffer.get(GL_ARRAY_BUFFER);
-      if (buf) state.attribs.set(index, { buffer: buf, size, type, stride, offset });
-      return _vap(index, size, type, normalized, stride, offset);
+    var _bufferSubData = proto.bufferSubData.bind(gl);
+    gl.bufferSubData = function(target, offset, data) {
+      if (offset === 0) storeBufferData(target, data);
+      return _bufferSubData.apply(this, arguments);
     };
 
-    const _enable = proto.enableVertexAttribArray.bind(gl);
-    gl.enableVertexAttribArray = function (index) {
+    var _vap = proto.vertexAttribPointer.bind(gl);
+    gl.vertexAttribPointer = function(index, size, type, normalized, stride, offset) {
+      var buf = state.boundBuffer.get(GL_ARRAY_BUFFER);
+      if (buf) state.attribs.set(index, { buffer: buf, size: size, type: type, stride: stride, offset: offset });
+      return _vap.apply(this, arguments);
+    };
+
+    var _enable = proto.enableVertexAttribArray.bind(gl);
+    gl.enableVertexAttribArray = function(index) {
       state.enabledAttribs.add(index);
       return _enable(index);
     };
 
-    const _disable = proto.disableVertexAttribArray.bind(gl);
-    gl.disableVertexAttribArray = function (index) {
+    var _disable = proto.disableVertexAttribArray.bind(gl);
+    gl.disableVertexAttribArray = function(index) {
       state.enabledAttribs.delete(index);
       return _disable(index);
     };
 
-    const _drawElements = proto.drawElements.bind(gl);
-    gl.drawElements = function (mode, count, type, offset) {
-      const idxBuf = state.boundBuffer.get(GL_ELEMENT_ARRAY_BUFFER);
-      const idxData = idxBuf ? (state.bufferStore.get(idxBuf) ?? null) : null;
+    var _drawElements = proto.drawElements.bind(gl);
+    gl.drawElements = function(mode, count, type, offset) {
+      var idxBuf = state.boundBuffer.get(GL_ELEMENT_ARRAY_BUFFER);
+      var idxData = idxBuf ? (state.bufferStore.get(idxBuf) || null) : null;
       buildAndEmit(state, idxData, idxData ? type : null, count);
       return _drawElements(mode, count, type, offset);
     };
 
-    const _drawArrays = proto.drawArrays.bind(gl);
-    gl.drawArrays = function (mode, first, count) {
+    var _drawArrays = proto.drawArrays.bind(gl);
+    gl.drawArrays = function(mode, first, count) {
       buildAndEmit(state, null, null, count);
       return _drawArrays(mode, first, count);
     };
 
-    console.info('[Userscript Tap] 🔌 WebGL context wrapped:', gl.constructor.name);
+    if (proto.drawElementsInstanced) {
+      var _dei = proto.drawElementsInstanced.bind(gl);
+      gl.drawElementsInstanced = function(mode, count, type, offset, inst) {
+        var idxBuf = state.boundBuffer.get(GL_ELEMENT_ARRAY_BUFFER);
+        var idxData = idxBuf ? (state.bufferStore.get(idxBuf) || null) : null;
+        buildAndEmit(state, idxData, idxData ? type : null, count);
+        return _dei(mode, count, type, offset, inst);
+      };
+    }
+    if (proto.drawArraysInstanced) {
+      var _dai = proto.drawArraysInstanced.bind(gl);
+      gl.drawArraysInstanced = function(mode, first, count, inst) {
+        buildAndEmit(state, null, null, count);
+        return _dai(mode, first, count, inst);
+      };
+    }
   }
 
-  // ── Patch HTMLCanvasElement.prototype.getContext ───────────────────────────
-  const _origCanvasGetContext = HTMLCanvasElement.prototype.getContext;
-  HTMLCanvasElement.prototype.getContext = function (type, ...args) {
-    const ctx = _origCanvasGetContext.call(this, type, ...args);
-    if (ctx && (type === 'webgl2' || type === 'webgl' || type === 'experimental-webgl')) {
+  var _origCanvas = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function(type) {
+    var ctx = _origCanvas.apply(this, arguments);
+    if (ctx && (type === 'webgl2' || type === 'webgl')) {
+      if (this.closest && this.closest('#root')) return ctx;
+      if (this.id === 'babylon-receiver-canvas') return ctx;
+      if (this.width < 100 || this.height < 100) return ctx;
       wrapContext(ctx);
     }
     return ctx;
   };
 
-  // ── Patch OffscreenCanvas.prototype.getContext ─────────────────────────────
   if (typeof OffscreenCanvas !== 'undefined') {
-    const _origOffscreen = OffscreenCanvas.prototype.getContext;
-    OffscreenCanvas.prototype.getContext = function (type, ...args) {
-      const ctx = _origOffscreen.call(this, type, ...args);
-      if (ctx && (type === 'webgl2' || type === 'webgl' || type === 'experimental-webgl')) {
-        wrapContext(ctx);
-      }
+    var _origOffscreen = OffscreenCanvas.prototype.getContext;
+    OffscreenCanvas.prototype.getContext = function(type) {
+      var ctx = _origOffscreen.apply(this, arguments);
+      if (ctx && (type === 'webgl2' || type === 'webgl')) wrapContext(ctx);
       return ctx;
     };
-    console.info('[Userscript Tap] 🔌 OffscreenCanvas.prototype.getContext patched');
   }
 
-  // ── Patch Worker to inject tap into workers too ───────────────────────────
-  // (Covers the case where Miris renders via OffscreenCanvas in a Web Worker)
-  const _OrigWorker = window.Worker;
-  window.Worker = function (url, options) {
-    console.info('[Userscript Tap] 🔌 Worker created:', String(url).substring(0, 80));
-    return new _OrigWorker(url, options);
+  // Blob Worker patch
+  var _capturedWorkerBlobs = new Set();
+  var _origRevoke = URL.revokeObjectURL.bind(URL);
+  URL.revokeObjectURL = function(url) { if (_capturedWorkerBlobs.has(String(url))) return; return _origRevoke(url); };
+
+  var workerIndex = 0;
+  var _OrigWorker = window.Worker;
+  window.Worker = function(url, options) {
+    var urlStr = String(url); 
+    _capturedWorkerBlobs.add(urlStr);
+    var code = 'try{await import('+JSON.stringify(urlStr)+');}catch(e){}\n';
+    return new _OrigWorker(URL.createObjectURL(new Blob([code],{type:'application/javascript'})),{type:'module'});
   };
   window.Worker.prototype = _OrigWorker.prototype;
 
-  console.info('[Userscript Tap] 🚀 Document-start tap installed — ALL WebGL paths covered');
-
-  // ── Falsification watchdog ─────────────────────────────────────────────────
-  window.addEventListener('load', () => {
-    setTimeout(() => {
-      if (interceptCount === 0) {
-        console.warn('[Userscript Tap] ⚠️ FALSIFICATION: 0 draw calls in 5s after load.');
-      } else {
-        console.info(`[Userscript Tap] 📊 ${interceptCount} draw calls captured.`);
-      }
-    }, 5000);
-
-    // Inject #root and bridge bundle after page load
-    setTimeout(() => {
+  // Inject BabylonJS Overlay
+  var injectAttempts = 0;
+  var injectTimer = setInterval(function() {
+    if (document.body && document.head) {
+      clearInterval(injectTimer);
       if (!document.getElementById('root')) {
-        const root = document.createElement('div');
+        var root = document.createElement('div');
         root.id = 'root';
         root.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:9998;';
         document.body.appendChild(root);
       }
-      const s = document.createElement('script');
+      var s = document.createElement('script');
       s.src = DEV + '/bridge-dist/bridge.iife.js';
-      s.onerror = () => console.error('[Userscript] ❌ Failed to load bridge bundle — is npm run dev running?');
       document.head.appendChild(s);
-      console.info('[Userscript] 💉 Bridge bundle injected');
-    }, 500);
-  });
+      console.info('[v3 Ultimate Tap] 💉 Injected Bridge Overlay bundle');
+    } else if (injectAttempts++ > 50) {
+      clearInterval(injectTimer);
+    }
+  }, 100);
 
 })();

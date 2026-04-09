@@ -53,17 +53,39 @@ export function translateChunk(
     vd.uvs = chunk.uv;
   }
 
+  // Native Indices passing from v3
+  // If Miris gave us an index buffer, use it directly!
   if (chunk.index) {
-    // BabylonJS wants indices in reverse winding order relative to Three.js
-    // because of the handedness flip. Reverse each triangle's vertex order.
     const src = chunk.index;
     const indices = new Uint32Array(src.length);
     for (let i = 0; i < src.length; i += 3) {
-      indices[i]     = src[i];
-      indices[i + 1] = src[i + 2]; // swap
-      indices[i + 2] = src[i + 1]; // swap
+      indices[i] = src[i];
+      // Winding order usually needs swapping from Three.js to BabylonJS
+      indices[i + 1] = src[i + 2];
+      indices[i + 2] = src[i + 1]; 
     }
     vd.indices = indices;
+  } else if (chunk.position) {
+    // Fallback: if Miris used drawArrays (no element buffer), we must sequence them
+    const numVertices = chunk.position.length / 3;
+    const indices = new Uint32Array(numVertices);
+    for (let k = 0; k < numVertices; k++) indices[k] = k;
+    
+    // Reverse winding order
+    for (let i = 0; i < indices.length - 2; i += 3) {
+      const tmp = indices[i + 1];
+      indices[i + 1] = indices[i + 2];
+      indices[i + 2] = tmp;
+    }
+    
+    vd.indices = indices;
+  }
+
+  // Generate normals if none
+  if (!vd.normals && vd.positions && vd.indices) {
+    const normals = new Float32Array(vd.positions.length);
+    VertexData.ComputeNormals(vd.positions, vd.indices, normals);
+    vd.normals = normals;
   }
 
   return vd;
